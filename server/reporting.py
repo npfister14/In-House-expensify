@@ -114,8 +114,13 @@ def render_report_pdf(report: dict) -> bytes:
                 colors.HexColor('#5b8cff'), colors.HexColor('#7b61ff'), colors.HexColor('#22c55e'),
                 colors.HexColor('#f59e0b'), colors.HexColor('#ef4444')
             ]
-            for i, s in enumerate(p.slices):
-                s.fillColor = palette[i % len(palette)]
+            # Pie.slices is a TypedPropertyCollection which generates entries on
+            # demand and does not expose a finite iterator. Enumerating it
+            # directly ends up creating slices forever, effectively hanging the
+            # PDF rendering. Instead, update only the slices corresponding to
+            # our data points.
+            for i in range(len(values)):
+                p.slices[i].fillColor = palette[i % len(palette)]
             d.add(p)
             d.add(Circle(size/2, size/2, 26, fillColor=colors.white, strokeColor=colors.white))
             d.add(String(0, size+2, title, fontSize=10))
