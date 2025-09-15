@@ -55,6 +55,7 @@ AIRTABLE_TABLE_ID = os.getenv("AIRTABLE_TABLE_ID")  # Optional: tblXXXXXXXX
 AIRTABLE_URL = os.getenv("AIRTABLE_URL")  # Optional: full Airtable UI URL (we'll parse app/tbl)
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")  # Optional: e.g., https://your-ngrok-id.ngrok.io
 DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY") or "Euro"  # Used when no currency provided
+FX_RATES_CHF_JSON = os.getenv("FX_RATES_CHF_JSON")  # Optional JSON mapping {"USD":0.90, "EUR":0.96, ...}
 
 # App-wide allowed categories (match frontend select options)
 ALLOWED_CATEGORIES = ["Travels", "Meals", "Supplies", "Others"]
@@ -129,6 +130,35 @@ def get_airtable_table():
         raise RuntimeError("Missing Airtable table. Set AIRTABLE_TABLE_ID, AIRTABLE_TABLE_NAME, or AIRTABLE_URL.")
 
     return Table(AIRTABLE_API_KEY, base_id, table_segment)
+
+
+# ===== FX conversion to CHF =====
+def _fx_rates_chf() -> dict:
+    try:
+        if FX_RATES_CHF_JSON:
+            data = json.loads(FX_RATES_CHF_JSON)
+            if isinstance(data, dict):
+                return {k.upper(): float(v) for k, v in data.items()}
+    except Exception:
+        pass
+    # Sensible defaults; override via FX_RATES_CHF_JSON in .env
+    return {
+        'CHF': 1.0,
+        'EUR': 0.96,
+        'EURO': 0.96,
+        'USD': 0.90,
+        'CAD': 0.66,
+    }
+
+
+def _to_chf(amount: float, currency: str | None) -> float:
+    try:
+        cur = (currency or 'CHF').upper()
+        rates = _fx_rates_chf()
+        rate = rates.get(cur, 1.0)
+        return round(float(amount) * float(rate), 2)
+    except Exception:
+        return round(float(amount or 0), 2)
 
 
 def build_public_url(path_segment: str) -> str:
@@ -284,10 +314,15 @@ def create_expense():
         uploader_email = _cf_email_from_request()
 
         try:
+            # Convert to CHF while retaining original amount/currency
+            original_amount = amount
+            original_currency = currency
+            amount_chf = _to_chf(original_amount, original_currency)
+
             payload = {
                 "Id": random_id,
                 "Name": name_val,
-                "Amount": amount,
+                "Amount": amount_chf,
                 "Attendees": attendees,
                 "Occasion": occasion,
                 "Payment": payment_method,
@@ -301,8 +336,9 @@ def create_expense():
             }
             if vat_rate is not None:
                 payload["VAT Rate"] = vat_rate
-            # Always set a currency (normalized or default)
-            payload["Currency"] = currency
+            # Store original currency and amount for reference in Airtable
+            payload["Currency"] = original_currency
+            payload["Original Amount"] = original_amount
             # Attach uploader under the fixed Airtable field name
             if uploader_email:
                 payload["Uploaded By"] = uploader_email
@@ -413,6 +449,7 @@ def list_expenses():
                 "record_id": r.get("id"),
                 "id": f.get("id"),
                 "name": f.get("Name"),
+                # Amount is stored in CHF in Airtable
                 "amount": f.get("Amount"),
                 "attendees": f.get("Attendees"),
                 "occasion": f.get("Occasion"),
@@ -421,7 +458,10 @@ def list_expenses():
                 "date_added": f.get("Date added"),
                 "category": f.get("Category"),
                 "reimburse_to": f.get("Reimburse to"),
+                # Currency represents the original currency of the expense
                 "currency": f.get("Currency"),
+                "original_amount": f.get("Original Amount"),
+                "original_currency": f.get("Currency"),
                 "vat_rate": f.get("VAT Rate"),
                 "status": status_val or "Under Review",
                 "receipt_url": first_url(f.get("Receipt")),
@@ -875,8 +915,11 @@ def _render_report_pdf(report: dict) -> bytes:
                 colors.HexColor('#5b8cff'), colors.HexColor('#7b61ff'), colors.HexColor('#22c55e'),
                 colors.HexColor('#f59e0b'), colors.HexColor('#ef4444')
             ]
-            for i, s in enumerate(p.slices):
-                s.fillColor = palette[i % len(palette)]
+            # Avoid iterating directly over p.slices as it lazily creates new
+            # entries on access. Doing so would never terminate. Update only the
+            # slices we actually need based on the data length.
+            for i in range(len(values)):
+                p.slices[i].fillColor = palette[i % len(palette)]
             d.add(p)
             # fake donut by overlaying circle
             d.add(Circle(size/2, size/2, 26, fillColor=colors.white, strokeColor=colors.white))
@@ -1512,7 +1555,8 @@ def seed_samples():
             payer = random.choice(people_pool)
             paym = random.choice(payments_pool)
             curr = choose_currency()
-            amt = amount_for_category(cat)
+            amt_orig = amount_for_category(cat)
+            amt_chf = _to_chf(amt_orig, curr)
             day = rand_day(period)
             status = random.choice(status_pool)
             vat_rate = vat_for(cat, merchant)
@@ -1522,7 +1566,7 @@ def seed_samples():
             record_payload = {
                 "Id": str(random.randint(1_000_000, 9_999_999)),
                 "Name": f"{merchant} {occ}",
-                "Amount": float(amt),
+                "Amount": float(amt_chf),
                 "Attendees": ", ".join(attendees_list),
                 "Occasion": occ,
                 "Payment": paym,
@@ -1532,6 +1576,7 @@ def seed_samples():
                 "Reimburse to": payer,
                 "Status": status,
                 "Currency": curr,
+                "Original Amount": float(amt_orig),
                 "VAT Rate": vat_rate,
                 "Receipt": [{"url": image_url}],
             }

@@ -40,6 +40,7 @@ AIRTABLE_TABLE_ID = os.getenv("AIRTABLE_TABLE_ID")
 AIRTABLE_URL = os.getenv("AIRTABLE_URL")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")
 DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY") or "Euro"
+FX_RATES_CHF_JSON = os.getenv("FX_RATES_CHF_JSON")
 
 ALLOWED_STATUSES = ["Done", "In-Progress", "Under Review"]
 
@@ -71,6 +72,27 @@ def build_public_url(path_segment: str) -> str:
     if not path_segment.startswith('/'):
         path_segment = '/' + path_segment
     return f"{base}{path_segment}"
+
+
+def _fx_rates_chf() -> dict:
+    try:
+        if FX_RATES_CHF_JSON:
+            import json as _json
+            data = _json.loads(FX_RATES_CHF_JSON)
+            if isinstance(data, dict):
+                return {k.upper(): float(v) for k, v in data.items()}
+    except Exception:
+        pass
+    return {'CHF':1.0,'EUR':0.96,'EURO':0.96,'USD':0.90,'CAD':0.66}
+
+
+def _to_chf(amount: float, currency: str | None) -> float:
+    try:
+        cur = (currency or 'CHF').upper()
+        rate = _fx_rates_chf().get(cur, 1.0)
+        return round(float(amount) * float(rate), 2)
+    except Exception:
+        return round(float(amount or 0), 2)
 
 
 @app.get("/healthz")
@@ -164,10 +186,15 @@ def create_expense():
         attachment = [{"url": image_url}]
 
         table = get_airtable_table()
+        # Convert to CHF but retain original amount/currency
+        original_amount = amount
+        original_currency = currency
+        amount_chf = _to_chf(original_amount, original_currency)
+
         payload = {
             "Id": random_id,
             "Name": name_val,
-            "Amount": amount,
+            "Amount": amount_chf,
             "Attendees": attendees,
             "Occasion": occasion,
             "Payment": payment_method,
@@ -177,7 +204,8 @@ def create_expense():
             "Reimburse to": reimburse_to,
             "Status": "Under Review",
             "Receipt": attachment,
-            "Currency": currency,
+            "Currency": original_currency,
+            "Original Amount": original_amount,
             "Hash": img_hash,
         }
         record = table.create(payload, typecast=True)

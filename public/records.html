@@ -94,14 +94,7 @@
         return `${d.getFullYear()}-${m}`;
       }
 
-      function currencySymbol(c){
-        const v = String(c||'').toUpperCase();
-        if (v === 'USD') return '$';
-        if (v === 'CHF') return 'CHF';
-        if (v === 'EURO') return '€';
-        if (v === 'CAD') return 'C$';
-        return '';
-      }
+      function chfSymbol(){ return 'CHF'; }
 
       async function load(month) {
         listEl.innerHTML = '<tr><td colspan="9">Loading…</td></tr>';
@@ -113,14 +106,8 @@
           if (!res.ok) throw new Error(data.error || 'Failed to load');
 
           const items = data.items || [];
-          const totals = {};
-          for (const it of items) {
-            const cur = it.currency || 'Unknown';
-            const val = Number(it.amount)||0;
-            totals[cur] = (totals[cur]||0) + val;
-          }
-          const totalsStr = Object.keys(totals).map(c => `${currencySymbol(c)||c} ${(totals[c]||0).toFixed(2)}${currencySymbol(c)?'':''}`).join(' • ');
-          summaryEl.textContent = `${data.month} — ${items.length} entries — ${totalsStr || 'No totals'}`;
+          const totalCHF = items.reduce((s, it) => s + (Number(it.amount)||0), 0);
+          summaryEl.textContent = `${data.month} — ${items.length} entries — CHF ${totalCHF.toFixed(2)}`;
 
           if (!items.length) { listEl.innerHTML = '<tr><td colspan="9">No records.</td></tr>'; return; }
 
@@ -130,12 +117,14 @@
                 <div><strong>${it.name || '(no name)'}</strong></div>
                 <div class=\"muted small\">${it.occasion || ''}${it.attendees ? ' • ' + it.attendees : ''}</div>
               </td>
-              <td>${currencySymbol(it.currency)} ${Number(it.amount||0).toFixed(2)}</td>
+              <td>CHF ${Number(it.amount||0).toFixed(2)}
+                ${it.original_amount ? `<div class=\"muted small\">Orig: ${Number(it.original_amount).toFixed(2)} ${it.original_currency||''}</div>` : ''}
+              </td>
               <td>${it.date || ''}</td>
               <td>${it.category || ''}</td>
               <td>${it.payment || ''}</td>
               <td>${it.vat_rate || '—'}</td>
-              <td>${it.currency || '—'}</td>
+              <td><span class=\"muted small\">${it.currency || ''}</span></td>
               <td>
                 <select data-record-id=\"${it.record_id}\" class=\"status-select\">
                   ${["Under Review","In-Progress","Done"].map(opt => `<option value=\"${opt}\" ${it.status===opt? 'selected':''}>${opt}</option>`).join('')}
@@ -184,7 +173,7 @@
           const res = await fetch(`/api/send-summary?month=${encodeURIComponent(m)}`, { method: 'POST' });
           const data = await res.json();
           if (!res.ok || !data.ok) throw new Error(data.error || 'Failed');
-          sendStatus.textContent = `Sent summary for ${data.month} (count: ${data.count}, total: €${Number(data.total||0).toFixed(2)})`;
+          sendStatus.textContent = `Sent summary for ${data.month} (count: ${data.count}, total: CHF ${Number(data.total||0).toFixed(2)})`;
         } catch (err) {
           sendStatus.textContent = 'Error: ' + err.message;
         }
