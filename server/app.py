@@ -875,8 +875,11 @@ def _render_report_pdf(report: dict) -> bytes:
                 colors.HexColor('#5b8cff'), colors.HexColor('#7b61ff'), colors.HexColor('#22c55e'),
                 colors.HexColor('#f59e0b'), colors.HexColor('#ef4444')
             ]
-            for i, s in enumerate(p.slices):
-                s.fillColor = palette[i % len(palette)]
+            # Avoid iterating directly over p.slices as it lazily creates new
+            # entries on access. Doing so would never terminate. Update only the
+            # slices we actually need based on the data length.
+            for i in range(len(values)):
+                p.slices[i].fillColor = palette[i % len(palette)]
             d.add(p)
             # fake donut by overlaying circle
             d.add(Circle(size/2, size/2, 26, fillColor=colors.white, strokeColor=colors.white))
