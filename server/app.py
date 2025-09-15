@@ -151,6 +151,16 @@ def _fx_rates_chf() -> dict:
     }
 
 
+def _fx_policy_description(rates: dict[str, float]) -> str:
+    try:
+        parts = [f"1 {cur} = {float(rate):.4f} CHF" for cur, rate in sorted(rates.items())]
+        if not parts:
+            return "Standard 1:1 CHF conversion"
+        return "Internal fixed conversion policy: " + ", ".join(parts)
+    except Exception:
+        return "Standard 1:1 CHF conversion"
+
+
 def _to_chf(amount: float, currency: str | None) -> float:
     try:
         cur = (currency or 'CHF').upper()
@@ -694,6 +704,7 @@ def _build_monthly_report(period: str, include_statuses: list[str] | None = None
 
     currency_buckets: dict[str, dict] = {}
     rows: list[dict] = []
+    fx_rates = _fx_rates_chf()
 
     for r in records:
         f = r.get("fields", {})
@@ -772,6 +783,8 @@ def _build_monthly_report(period: str, include_statuses: list[str] | None = None
             "status": status,
             "receiptUrl": _first_url(f.get("Receipt")),
             "id": r.get("id"),
+            "originalAmount": _round2(gross),
+            "originalCurrency": cur,
         })
 
     # Round numbers and sort keys
@@ -789,6 +802,8 @@ def _build_monthly_report(period: str, include_statuses: list[str] | None = None
         "period": period,
         "currencyBuckets": currency_buckets,
         "rows": rows,
+        "fxRatesCHF": fx_rates,
+        "fxPolicy": _fx_policy_description(fx_rates),
     }
     return report
 
