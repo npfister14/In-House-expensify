@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Env
+.env
+
+# Uploads
+uploads/
+
+# Node leftovers
+node_modules/
+*.log

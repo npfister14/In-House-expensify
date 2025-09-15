@@ -1,0 +1,13 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Flask server",
+			"type": "shell",
+			"command": "/Users/niklas/Desktop/work/In-House-expensify/.venv/bin/python server/app.py",
+			"args": [],
+			"isBackground": false,
+			"group": "build"
+		}
+	]
+}

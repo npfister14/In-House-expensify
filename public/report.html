@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Monthly Expense Report</title>
+    <!-- Tailwind + DaisyUI (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" />
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <!-- Lucide Icons -->
+    <script type="module">
+      import { createIcons, ChartBar, CreditCard, CircleDollarSign, ListChecks, Loader2 } from "https://cdn.jsdelivr.net/npm/lucide@0.468.0/+esm";
+      window.createIcons = createIcons;
+    </script>
+    <style>
+      body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif; }
+      .card { box-shadow: 0 6px 24px rgba(0,0,0,0.08); }
+      .status-chip { padding: 2px 8px; border-radius: 999px; font-size: 12px; color: #fff; }
+      .chip-done { background: #22c55e; }
+      .chip-progress { background: #f59e0b; }
+      .chip-review { background: #ef4444; }
+      .table-wrap { overflow: auto; }
+      thead th { position: sticky; top: 0; background: var(--fallback-b1, #fff); z-index: 1; }
+    </style>
+  </head>
+  <body class="bg-base-200">
+    <div class="max-w-screen-xl mx-auto p-4 md:p-6">
+      <!-- Header -->
+      <div class="flex items-center justify-between gap-4">
+        <div>
+          <h1 id="title" class="text-2xl font-bold">Monthly Expense Report</h1>
+          <p id="subtitle" class="text-sm opacity-70">Generated …</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <input id="month" type="month" class="input input-bordered input-sm" />
+          <button id="load" class="btn btn-sm">Load</button>
+          <a id="pdf" class="btn btn-sm btn-outline" target="_blank">PDF</a>
+        </div>
+      </div>
+
+      <!-- Executive Summary -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+        <div class="card bg-base-100"><div class="card-body"><h3 class="card-title text-sm">Total Gross</h3><div id="gross" class="text-2xl font-bold">–</div></div></div>
+        <div class="card bg-base-100"><div class="card-body"><h3 class="card-title text-sm">Total Net</h3><div id="net" class="text-2xl font-bold">–</div></div></div>
+        <div class="card bg-base-100"><div class="card-body"><h3 class="card-title text-sm">Total VAT</h3><div id="vat" class="text-2xl font-bold">–</div></div></div>
+      </div>
+      <div class="card bg-base-100 mt-4"><div class="card-body"><h3 class="card-title text-sm">Totals by Currency</h3><div id="totals-currency" class="grid grid-cols-1 md:grid-cols-3 gap-3"></div></div></div>
+
+      <!-- Breakdowns -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
+        <div class="card bg-base-100"><div class="card-body">
+          <h3 class="card-title text-sm">By Category</h3>
+          <canvas id="chart-category" height="140"></canvas>
+          <div id="table-category" class="mt-2"></div>
+        </div></div>
+        <div class="card bg-base-100"><div class="card-body">
+          <h3 class="card-title text-sm">By Payment Method</h3>
+          <canvas id="chart-payment" height="160"></canvas>
+          <div id="table-payment" class="mt-2"></div>
+        </div></div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+        <div class="card bg-base-100"><div class="card-body">
+          <h3 class="card-title text-sm">Company Card Overview</h3>
+          <div id="company-card" class="text-xl font-bold">–</div>
+        </div></div>
+        <div class="card bg-base-100"><div class="card-body">
+          <h3 class="card-title text-sm">Reimbursements Overview (Done, Personal/Cash)</h3>
+          <div id="reimb-total" class="text-sm opacity-70">Total: –</div>
+          <div id="reimb-table" class="mt-2"></div>
+        </div></div>
+      </div>
+
+      <!-- Pending Overview -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+        <div class="card bg-warning text-warning-content"><div class="card-body">
+          <h3 class="card-title text-sm">In‑Progress</h3>
+          <div id="pending-ip" class="text-xl font-bold">–</div>
+        </div></div>
+        <div class="card bg-error text-error-content"><div class="card-body">
+          <h3 class="card-title text-sm">Under Review</h3>
+          <div id="pending-ur" class="text-xl font-bold">–</div>
+        </div></div>
+      </div>
+
+      <!-- Detailed Rows -->
+      <div class="card bg-base-100 mt-6">
+        <div class="card-body">
+          <h3 class="card-title text-sm">Detailed Rows</h3>
+          <div class="table-wrap mt-2">
+            <table class="table table-zebra">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Payer</th>
+                  <th>Category</th>
+                  <th>Payment</th>
+                  <th class="text-right">Gross</th>
+                  <th class="text-right">Net</th>
+                  <th class="text-right">VAT</th>
+                  <th>Currency</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <footer class="mt-8 text-xs opacity-70">
+        <div>In‑House Expensify — Company details placeholder</div>
+      </footer>
+    </div>
+
+    <script>
+      function fmt(n){ return (Number(n||0)).toFixed(2); }
+      function currencySymbol(c){ const v = String(c||'').toUpperCase(); if(v==='USD')return '$'; if(v==='CHF')return 'CHF'; if(v==='EURO')return '€'; if(v==='CAD')return 'C$'; return ''; }
+      function nowUTC(){ const d=new Date(); return d.toISOString().slice(0,16).replace('T',' ')+ ' UTC'; }
+      function currentMonth(){ const d=new Date(); const m=String(d.getMonth()+1).padStart(2,'0'); return `${d.getFullYear()}-${m}`; }
+
+      const monthEl = document.getElementById('month');
+      const btnLoad = document.getElementById('load');
+      const linkPdf = document.getElementById('pdf');
+      monthEl.value = currentMonth();
+
+      async function load(){
+        const m = monthEl.value || currentMonth();
+        const url = `/api/expense-report?month=${encodeURIComponent(m)}`;
+        let res, text, report;
+        try {
+          res = await fetch(url);
+          text = await res.text();
+          try { report = JSON.parse(text); } catch (e) {
+            console.error('Non-JSON from API', text);
+            alert('Failed to load report (invalid response)');
+            return;
+          }
+          if (!res.ok) { alert(report.error || 'Failed to load report'); return; }
+        } catch (err) {
+          alert('Network error while loading report: ' + err.message);
+          return;
+        }
+
+        document.getElementById('title').textContent = `Monthly Expense Report — ${report.period}`;
+        document.getElementById('subtitle').textContent = `Generated ${nowUTC()}`;
+        linkPdf.href = `/api/expense-report.pdf?month=${encodeURIComponent(report.period)}&ts=${Date.now()}`;
+
+        // Executive summary
+        let g=0,n=0,v=0;
+        for(const cur in report.currencyBuckets){
+          const t = report.currencyBuckets[cur].totals||{};
+          g+=Number(t.gross||0); n+=Number(t.net||0); v+=Number(t.vat||0);
+        }
+        document.getElementById('gross').textContent = fmt(g);
+        document.getElementById('net').textContent = fmt(n);
+        document.getElementById('vat').textContent = fmt(v);
+
+        const tc = document.getElementById('totals-currency');
+        tc.innerHTML = '';
+        for(const cur in report.currencyBuckets){
+          const t = report.currencyBuckets[cur].totals||{};
+          const div = document.createElement('div');
+          div.className = 'p-3 rounded-lg border border-base-300';
+          div.innerHTML = `<div class="text-sm opacity-70">${cur}</div><div class="text-lg font-semibold">${fmt(t.gross||0)} gross • ${fmt(t.net||0)} net • ${fmt(t.vat||0)} VAT</div>`;
+          tc.appendChild(div);
+        }
+
+        // Aggregate breakdowns across currencies for screen charts
+        const catAgg = {}; const payAgg = {}; let ccTotal=0; const reimbByEmp={}; let reimbGrand=0;
+        for(const cur in report.currencyBuckets){
+          const b = report.currencyBuckets[cur];
+          for(const k in (b.byCategory||{})) catAgg[k]=(catAgg[k]||0)+Number(b.byCategory[k]||0);
+          for(const k in (b.byPaymentMethod||{})) payAgg[k]=(payAgg[k]||0)+Number(b.byPaymentMethod[k]||0);
+          ccTotal += Number(b.companyCardCharged||0);
+          for(const k in (b.reimbursementsByEmployee||{})){
+            reimbByEmp[k]=(reimbByEmp[k]||0)+Number(b.reimbursementsByEmployee[k]||0);
+            reimbGrand += Number(b.reimbursementsByEmployee[k]||0);
+          }
+        }
+        document.getElementById('company-card').textContent = fmt(ccTotal);
+        document.getElementById('reimb-total').textContent = `Total: ${fmt(reimbGrand)}`;
+        // Reimb table
+        const rt = document.getElementById('reimb-table');
+        rt.innerHTML = Object.keys(reimbByEmp).length ? `<table class='table table-sm'><thead><tr><th>Employee</th><th class='text-right'>Amount</th></tr></thead><tbody>${Object.keys(reimbByEmp).map(k=>`<tr><td>${k}</td><td class='text-right'>${fmt(reimbByEmp[k])}</td></tr>`).join('')}</tbody></table>` : '<div class="opacity-60">No reimbursements.</div>';
+
+        // Pending overview (sum across currencies)
+        let ipC=0, ipG=0, urC=0, urG=0;
+        for(const cur in report.currencyBuckets){
+          const p = report.currencyBuckets[cur].pending||{};
+          const ip = p.inProgress||{}; const ur = p.underReview||{};
+          ipC += Number(ip.count||0); ipG += Number(ip.gross||0);
+          urC += Number(ur.count||0); urG += Number(ur.gross||0);
+        }
+        document.getElementById('pending-ip').textContent = `${ipC} • ${fmt(ipG)}`;
+        document.getElementById('pending-ur').textContent = `${urC} • ${fmt(urG)}`;
+
+        // Charts
+        const catCtx = document.getElementById('chart-category');
+        const payCtx = document.getElementById('chart-payment');
+        if(window._c1) window._c1.destroy();
+        if(window._c2) window._c2.destroy();
+        window._c1 = new Chart(catCtx, { type: 'bar', data: { labels: Object.keys(catAgg), datasets: [{ label: 'Amount', data: Object.keys(catAgg).map(k=>catAgg[k]), backgroundColor: '#5b8cff' }]}, options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } } });
+        window._c2 = new Chart(payCtx, { type: 'doughnut', data: { labels: Object.keys(payAgg), datasets: [{ data: Object.keys(payAgg).map(k=>payAgg[k]), backgroundColor: ['#5b8cff','#7b61ff','#22c55e','#f59e0b','#ef4444'] }]}, options: { plugins: { legend: { position: 'bottom' } } });
+
+        // Breakdown tables
+        document.getElementById('table-category').innerHTML = `<table class='table table-sm'><thead><tr><th>Category</th><th class='text-right'>Amount</th></tr></thead><tbody>${Object.keys(catAgg).map(k=>`<tr><td>${k}</td><td class='text-right'>${fmt(catAgg[k])}</td></tr>`).join('')}</tbody></table>`;
+        document.getElementById('table-payment').innerHTML = `<table class='table table-sm'><thead><tr><th>Payment</th><th class='text-right'>Amount</th></tr></thead><tbody>${Object.keys(payAgg).map(k=>`<tr><td>${k}</td><td class='text-right'>${fmt(payAgg[k])}</td></tr>`).join('')}</tbody></table>`;
+
+        // Detailed rows
+        const tbody = document.getElementById('rows');
+        tbody.innerHTML = (report.rows||[]).map(r => {
+          const s = (r.status||'').toLowerCase();
+          const chipClass = s.includes('done') ? 'chip-done' : (s.includes('progress') ? 'chip-progress' : 'chip-review');
+          return `<tr>
+            <td>${r.date||''}</td>
+            <td>${r.payer||''}</td>
+            <td>${r.category||''}</td>
+            <td>${r.paymentMethod||''}</td>
+            <td class='text-right'>${fmt(r.gross)}</td>
+            <td class='text-right'>${fmt(r.net)}</td>
+            <td class='text-right'>${fmt(r.vat)}</td>
+            <td>${r.currency||''}</td>
+            <td><span class='status-chip ${chipClass}'>${r.status||''}</span></td>
+          </tr>`;
+        }).join('');
+      }
+
+      btnLoad.addEventListener('click', load);
+      load();
+    </script>
+  </body>
+  </html>

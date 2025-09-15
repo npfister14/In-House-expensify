@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>In‑House Expensify — Records</title>
+    <link rel="stylesheet" href="/styles.css?v=3" />
+    <script defer src="/app.js?v=3"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <aside class="sidebar" aria-label="Primary">
+      <div class="sidebar-brand">In‑House Expensify</div>
+      <nav>
+        <a href="/">New Expense</a>
+        <a href="/records" aria-current="page">Records</a>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="user-pill" class="pill" title="Signed in"></span>
+        <button id="theme-toggle" class="ghost small" aria-label="Toggle theme">🌙</button>
+      </div>
+    </aside>
+
+    <header class="topbar">
+      <button class="menu-toggle ghost" aria-label="Toggle menu">☰</button>
+      <div class="topbar-title">Expense Records</div>
+      <div class="topbar-actions">
+        <a class="ghost" href="/">New Expense</a>
+      </div>
+    </header>
+
+    <main id="main" class="content">
+      <section class="page-header">
+        <h1>Expenses by Month</h1>
+        <p>Filter by month, review details, update statuses, and export a PDF.</p>
+      </section>
+
+      <section class="panel">
+        <div class="toolbar">
+          <div class="field">
+            <label for="month">Month</label>
+            <input id="month" type="month" />
+          </div>
+          <div class="toolbar-actions">
+            <button id="load">Load</button>
+            <button id="pdf" class="ghost" title="Open monthly PDF">Report PDF</button>
+          </div>
+        </div>
+        <div id="summary" class="muted"></div>
+      </section>
+
+      <section class="panel">
+        <div class="table-wrap">
+          <table class="table" id="table" aria-label="Expenses table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Amount</th>
+                <th>Date</th>
+                <th>Category</th>
+                <th>Payment</th>
+                <th>VAT</th>
+                <th>Currency</th>
+                <th>Status</th>
+                <th>Receipt</th>
+              </tr>
+            </thead>
+            <tbody id="list"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="field">
+          <button id="send-summary">Send summary email</button>
+          <span id="send-status" class="muted" style="margin-left:8px"></span>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const monthEl = document.getElementById('month');
+      const listEl = document.getElementById('list');
+      const summaryEl = document.getElementById('summary');
+      const loadBtn = document.getElementById('load');
+      const sendBtn = document.getElementById('send-summary');
+      const sendStatus = document.getElementById('send-status');
+      const pdfBtn = document.getElementById('pdf');
+
+      function currentMonth() {
+        const d = new Date();
+        const m = String(d.getMonth()+1).padStart(2, '0');
+        return `${d.getFullYear()}-${m}`;
+      }
+
+      function currencySymbol(c){
+        const v = String(c||'').toUpperCase();
+        if (v === 'USD') return '$';
+        if (v === 'CHF') return 'CHF';
+        if (v === 'EURO') return '€';
+        if (v === 'CAD') return 'C$';
+        return '';
+      }
+
+      async function load(month) {
+        listEl.innerHTML = '<tr><td colspan="9">Loading…</td></tr>';
+        summaryEl.textContent = '';
+        try {
+          const q = month ? `?month=${encodeURIComponent(month)}` : '';
+          const res = await fetch(`/api/expenses${q}`);
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Failed to load');
+
+          const items = data.items || [];
+          const totals = {};
+          for (const it of items) {
+            const cur = it.currency || 'Unknown';
+            const val = Number(it.amount)||0;
+            totals[cur] = (totals[cur]||0) + val;
+          }
+          const totalsStr = Object.keys(totals).map(c => `${currencySymbol(c)||c} ${(totals[c]||0).toFixed(2)}${currencySymbol(c)?'':''}`).join(' • ');
+          summaryEl.textContent = `${data.month} — ${items.length} entries — ${totalsStr || 'No totals'}`;
+
+          if (!items.length) { listEl.innerHTML = '<tr><td colspan="9">No records.</td></tr>'; return; }
+
+          listEl.innerHTML = items.map(it => `
+            <tr>
+              <td>
+                <div><strong>${it.name || '(no name)'}</strong></div>
+                <div class=\"muted small\">${it.occasion || ''}${it.attendees ? ' • ' + it.attendees : ''}</div>
+              </td>
+              <td>${currencySymbol(it.currency)} ${Number(it.amount||0).toFixed(2)}</td>
+              <td>${it.date || ''}</td>
+              <td>${it.category || ''}</td>
+              <td>${it.payment || ''}</td>
+              <td>${it.vat_rate || '—'}</td>
+              <td>${it.currency || '—'}</td>
+              <td>
+                <select data-record-id=\"${it.record_id}\" class=\"status-select\">
+                  ${["Under Review","In-Progress","Done"].map(opt => `<option value=\"${opt}\" ${it.status===opt? 'selected':''}>${opt}</option>`).join('')}
+                </select>
+                <span class=\"small muted\" id=\"st-${it.record_id}\"></span>
+                ${it.duplicate_hint ? `<div class=\"small\" style=\"color: var(--danger)\">Dup (${it.duplicate_count})</div>` : ''}
+              </td>
+              <td>${it.receipt_url ? `<a href=\"#\" onclick=\"openModalImage('${it.receipt_url.replace(/'/g, "\\'" )}');return false;\">View</a>` : ''}</td>
+            </tr>
+          `).join('');
+
+          for (const sel of listEl.querySelectorAll('.status-select')) {
+            sel.addEventListener('change', async () => {
+              const rid = sel.getAttribute('data-record-id');
+              const val = sel.value;
+              const hint = document.getElementById(`st-${rid}`);
+              hint.textContent = 'Saving…';
+              try {
+                const res = await fetch(`/api/expenses/${encodeURIComponent(rid)}/status`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ status: val })
+                });
+                const data = await res.json();
+                if (!res.ok || data.ok === false) throw new Error(data.error || 'Failed');
+                hint.textContent = 'Saved';
+                if (window.showToast) showToast('Status updated', 'success');
+                setTimeout(() => { hint.textContent = ''; }, 1500);
+              } catch (err) {
+                hint.textContent = 'Error: ' + err.message;
+                if (window.showToast) showToast(err.message, 'error');
+              }
+            });
+          }
+        } catch (err) {
+          listEl.innerHTML = `<tr><td colspan=\"9\">Error: ${err.message}</td></tr>`;
+        }
+      }
+
+      document.getElementById('load').addEventListener('click', () => load(monthEl.value));
+
+      sendBtn.addEventListener('click', async () => {
+        sendStatus.textContent = 'Sending…';
+        try {
+          const m = monthEl.value || currentMonth();
+          const res = await fetch(`/api/send-summary?month=${encodeURIComponent(m)}`, { method: 'POST' });
+          const data = await res.json();
+          if (!res.ok || !data.ok) throw new Error(data.error || 'Failed');
+          sendStatus.textContent = `Sent summary for ${data.month} (count: ${data.count}, total: €${Number(data.total||0).toFixed(2)})`;
+        } catch (err) {
+          sendStatus.textContent = 'Error: ' + err.message;
+        }
+      });
+
+      pdfBtn.addEventListener('click', () => {
+        const m = monthEl.value || currentMonth();
+        const ts = Date.now();
+        const url = `/api/expense-report.pdf?month=${encodeURIComponent(m)}&ts=${ts}`;
+        window.open(url, '_blank');
+      });
+
+      const cm = currentMonth();
+      monthEl.value = cm;
+      load(cm);
+    </script>
+  </body>
+</html>
