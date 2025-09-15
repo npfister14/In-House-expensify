@@ -1537,13 +1537,15 @@ def seed_samples():
             return 8.1
 
         def choose_currency() -> str:
-            # Slightly favor CHF and Euro
+            # Strongly favor CHF (~95% of the time)
             roll = random.random()
-            if roll < 0.45:
+            if roll < 0.95:
                 return "CHF"
-            if roll < 0.8:
+            # Distribute remaining 5% across Euro, USD, CAD
+            r2 = random.random()
+            if r2 < 0.6:
                 return "Euro"
-            if roll < 0.92:
+            if r2 < 0.9:
                 return "USD"
             return "CAD"
 
