@@ -749,6 +749,33 @@ def _first_url(attachments: Any) -> str | None:
     return None
 
 
+def _stringify_many(value: Any) -> str:
+    """Return a comma-separated string for list-like values."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        parts = [str(part) for part in value if part not in (None, "")]
+        return ", ".join(parts)
+    return str(value)
+
+
+def _split_date_time(value: Any) -> tuple[str, str]:
+    """Split a combined datetime string into date and time components."""
+    if not value:
+        return "", ""
+    text = str(value)
+    if "T" in text:
+        date_part, time_part = text.split("T", 1)
+        time_part = time_part.split("+")[0].split("Z")[0]
+        if "." in time_part:
+            time_part = time_part.split(".", 1)[0]
+        return date_part, time_part
+    if " " in text:
+        date_part, time_part = text.split(" ", 1)
+        return date_part, time_part.strip()
+    return text, ""
+
+
 def _round2(value: float | int | None) -> float:
     """Round values to two decimals without raising."""
     try:
@@ -841,10 +868,35 @@ def _build_monthly_report(period: str, *, include_statuses: list[str] | None = N
         if payment.lower() in {"personal", "cash"}:
             bucket["reimbursementsByEmployee"][payer] = bucket["reimbursementsByEmployee"].get(payer, 0.0) + gross
 
+        attendees_val = _stringify_many(fields.get("Attendees"))
+        name_val = _stringify_many(fields.get("Name"))
+        receipt_url = _first_url(fields.get("Receipt"))
+        date_only, time_part = _split_date_time(date_occ)
+        date_added_field = fields.get("Date added")
+        if not date_only and date_added_field:
+            date_candidate, _ = _split_date_time(date_added_field)
+            if date_candidate:
+                date_only = date_candidate
+        if not time_part and date_added_field:
+            _, added_time = _split_date_time(date_added_field)
+            if added_time:
+                time_part = added_time
+        explicit_time = fields.get("Time")
+        if explicit_time:
+            _, extracted_time = _split_date_time(explicit_time)
+            time_part = extracted_time or str(explicit_time)
+        date_only = date_only or str(date_occ or "")
+        time_part = time_part or ""
+
         rows.append(
             {
                 "recordId": record.get("id"),
                 "date": date_occ,
+                "dateOnly": date_only,
+                "time": time_part,
+                "dateAdded": date_added_field or "",
+                "name": name_val,
+                "attendees": attendees_val,
                 "payer": payer,
                 "category": category,
                 "paymentMethod": payment,
@@ -853,6 +905,7 @@ def _build_monthly_report(period: str, *, include_statuses: list[str] | None = N
                 "vat": vat_amt,
                 "currency": cur,
                 "status": status,
+                "receiptUrl": receipt_url,
                 "fxPolicy": _fx_policy_description(fx_rates),
             }
         )
@@ -892,6 +945,163 @@ def _render_error_pdf(message: str) -> bytes:
     ]
     doc.build(elements)
     return buffer.getvalue()
+
+
+RAW_EXPORT_COLUMNS = [
+    "Name",
+    "Amount Gross",
+    "Amount Net",
+    "Attendees",
+    "Payment Method",
+    "VAT",
+    "Date",
+    "Time",
+    "Currency",
+    "Receipt Link",
+]
+
+
+def _prepare_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return rows formatted for raw PDF/Excel exports."""
+    rows: list[dict[str, Any]] = []
+    for row in report.get("rows", []):
+        name_source = row.get("name") or row.get("payer")
+        attendees_source = row.get("attendees")
+        date_value = row.get("dateOnly") or row.get("date") or ""
+        time_value = row.get("time") or ""
+        rows.append(
+            {
+                "Name": _stringify_many(name_source),
+                "Amount Gross": _round2(row.get("gross")),
+                "Amount Net": _round2(row.get("net")),
+                "Attendees": _stringify_many(attendees_source),
+                "Payment Method": _stringify_many(row.get("paymentMethod")),
+                "VAT": _round2(row.get("vat")),
+                "Date": _stringify_many(date_value),
+                "Time": _stringify_many(time_value),
+                "Currency": _stringify_many(row.get("currency")),
+                "Receipt Link": row.get("receiptUrl") or "",
+            }
+        )
+    return rows
+
+
+def render_raw_report_pdf(report: dict[str, Any]) -> bytes:
+    """Render a simple table-style PDF with one row per expense."""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.units import mm
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    except Exception as exc:  # pragma: no cover - depends on optional dependency
+        raise RuntimeError("Raw PDF export requires reportlab. Install it: pip install reportlab") from exc
+
+    export_rows = _prepare_export_rows(report)
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=16 * mm,
+        rightMargin=16 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
+    )
+    styles = getSampleStyleSheet()
+    elements: list[Any] = []
+    title = f"Expenses — {report.get('period', '')}"
+    elements.append(Paragraph(title, styles["Heading2"]))
+    elements.append(Spacer(0, 8))
+
+    data: list[list[Any]] = [RAW_EXPORT_COLUMNS]
+    for item in export_rows:
+        data.append(
+            [
+                item["Name"],
+                f"{item['Amount Gross']:.2f}",
+                f"{item['Amount Net']:.2f}",
+                item["Attendees"],
+                item["Payment Method"],
+                f"{item['VAT']:.2f}",
+                item["Date"],
+                item["Time"],
+                item["Currency"],
+                item["Receipt Link"],
+            ]
+        )
+    if len(data) == 1:
+        empty_row = ["No expenses found"] + ["" for _ in range(len(RAW_EXPORT_COLUMNS) - 1)]
+        data.append(empty_row)
+
+    table = Table(data, repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("ALIGN", (1, 1), (2, -1), "RIGHT"),
+                ("ALIGN", (5, 1), (5, -1), "RIGHT"),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.25, colors.black),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.black),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]
+        )
+    )
+    elements.append(table)
+    doc.build(elements)
+    return buffer.getvalue()
+
+
+def generate_raw_report_pdf(
+    period: str, *, include_statuses: list[str] | None = None
+) -> tuple[bytes, dict]:
+    """Build the monthly report and render a raw PDF table."""
+    report = _build_monthly_report(period, include_statuses=include_statuses)
+    pdf_bytes = render_raw_report_pdf(report)
+    return pdf_bytes, report
+
+
+def generate_raw_report_excel(
+    period: str, *, include_statuses: list[str] | None = None
+) -> tuple[bytes, dict]:
+    """Build the monthly report and render an Excel workbook."""
+    report = _build_monthly_report(period, include_statuses=include_statuses)
+    rows = _prepare_export_rows(report)
+    try:
+        from openpyxl import Workbook
+        from openpyxl.utils import get_column_letter
+    except Exception as exc:  # pragma: no cover - depends on optional dependency
+        raise RuntimeError("Excel export requires openpyxl. Install it: pip install openpyxl") from exc
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Expenses"
+    sheet.append(RAW_EXPORT_COLUMNS)
+    for item in rows:
+        sheet.append(
+            [
+                item["Name"],
+                item["Amount Gross"],
+                item["Amount Net"],
+                item["Attendees"],
+                item["Payment Method"],
+                item["VAT"],
+                item["Date"],
+                item["Time"],
+                item["Currency"],
+                item["Receipt Link"],
+            ]
+        )
+
+    for idx, column in enumerate(RAW_EXPORT_COLUMNS, start=1):
+        values = [column] + [row[column] for row in rows]
+        max_len = max((len(str(value or "")) for value in values), default=len(column))
+        sheet.column_dimensions[get_column_letter(idx)].width = min(max_len + 2, 60)
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    workbook.close()
+    return buffer.getvalue(), report
 
 
 @app.get("/api/expense-report")
@@ -1014,6 +1224,161 @@ def get_expense_report_pdf():
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
         return response
+
+
+EXPORT_VARIANTS: dict[str, dict[str, Any]] = {
+    "raw-pdf": {
+        "label": "Raw PDF",
+        "filename": "expenses_raw_{period}.pdf",
+        "mimetype": "application/pdf",
+        "maintype": "application",
+        "subtype": "pdf",
+        "disposition": "inline",
+        "generator": generate_raw_report_pdf,
+    },
+    "raw-excel": {
+        "label": "Raw Excel",
+        "filename": "expenses_raw_{period}.xlsx",
+        "mimetype": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "maintype": "application",
+        "subtype": "vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "disposition": "attachment",
+        "generator": generate_raw_report_excel,
+    },
+    "detailed-pdf": {
+        "label": "Detailed Overview PDF",
+        "filename": "expenses_{period}.pdf",
+        "mimetype": "application/pdf",
+        "maintype": "application",
+        "subtype": "pdf",
+        "disposition": "inline",
+        "generator": generate_report_pdf,
+    },
+}
+
+EMAIL_OPTION_PREFIX = "email-"
+
+
+def _export_option_from_request(payload: Mapping[str, Any] | None = None) -> str:
+    """Return the export option string from query parameters or JSON payload."""
+    option = request.args.get("option")
+    if not option and request.method == "POST":
+        if payload is None:
+            payload_candidate = request.get_json(silent=True)
+            if isinstance(payload_candidate, Mapping):
+                payload = payload_candidate
+        if isinstance(payload, Mapping):
+            option = payload.get("option")
+        if not option:
+            option = request.form.get("option")
+    return str(option or "").strip().lower()
+
+
+@app.route("/api/export-report", methods=["GET", "POST"])
+def export_report_action():
+    """Handle raw/detailed export downloads and email delivery."""
+    payload: Mapping[str, Any] | None = None
+    if request.method == "POST":
+        candidate = request.get_json(silent=True)
+        if isinstance(candidate, Mapping):
+            payload = candidate
+
+    option = _export_option_from_request(payload)
+    if not option:
+        return jsonify({"error": "Missing export option"}), 400
+
+    is_email = option.startswith(EMAIL_OPTION_PREFIX)
+    base_option = option[len(EMAIL_OPTION_PREFIX) :] if is_email else option
+    variant = EXPORT_VARIANTS.get(base_option)
+    if not variant:
+        return jsonify({"error": "Unknown export option"}), 400
+
+    period = _period_from_request(allow_parts=True, allow_body=request.method == "POST")
+
+    statuses_param = request.args.get("statuses")
+    if request.method == "POST":
+        if not statuses_param and isinstance(payload, Mapping):
+            statuses_param = payload.get("statuses")
+        if not statuses_param:
+            statuses_param = request.form.get("statuses")
+    include_statuses = _parse_statuses_param(statuses_param)
+
+    generator = variant["generator"]
+
+    if request.method == "GET":
+        if is_email:
+            return jsonify({"error": "Email export requires POST"}), 400
+        try:
+            file_bytes, report = generator(period, include_statuses=include_statuses)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            return jsonify({"error": str(exc)}), 500
+        filename = variant["filename"].format(period=report.get("period", period))
+        response = Response(file_bytes, mimetype=variant["mimetype"])
+        response.headers["Content-Disposition"] = f"{variant['disposition']}; filename={filename}"
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+    # POST: email delivery
+    if not is_email:
+        return jsonify({"error": "Download options must use GET"}), 400
+    if not (SMTP_HOST and EMAIL_FROM):
+        return jsonify({"ok": False, "error": "SMTP not configured (SMTP_HOST/EMAIL_FROM)"}), 400
+
+    current_email = _cf_email_from_request()
+    if not current_email:
+        return jsonify({"ok": False, "error": "No authenticated user email from SSO"}), 401
+
+    try:
+        file_bytes, report = generator(period, include_statuses=include_statuses)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    filename = variant["filename"].format(period=report.get("period", period))
+    attachments = [
+        {
+            "filename": filename,
+            "content": file_bytes,
+            "maintype": variant["maintype"],
+            "subtype": variant["subtype"],
+        }
+    ]
+
+    recipients = [current_email]
+    rows = report.get("rows", [])
+    rows_count = len(rows)
+    total_gross = _round2(sum((row.get("gross") or 0) for row in rows))
+    subject = f"Expense Report {report.get('period', period)} — {variant['label']}"
+    html = (
+        f"<p>Please find the {variant['label']} for {report.get('period', period)} attached.</p>"
+        f"<p>{rows_count} expenses — gross total {total_gross:.2f}</p>"
+    )
+
+    try:
+        import threading
+
+        threading.Thread(
+            target=lambda: send_email(subject, html, recipients, attachments=attachments),
+            daemon=True,
+        ).start()
+    except Exception:  # pragma: no cover - fallback execution path
+        try:
+            send_email(subject, html, recipients, attachments=attachments)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    return jsonify(
+        {
+            "ok": True,
+            "queued": True,
+            "month": report.get("period", period),
+            "count": rows_count,
+            "total": total_gross,
+            "variant": base_option,
+            "variantLabel": variant["label"],
+        }
+    )
 
 
 @app.get("/api/whoami")
