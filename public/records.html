@@ -44,10 +44,21 @@
           </div>
           <div class="toolbar-actions">
             <button id="load">Load</button>
-            <button id="pdf" class="ghost" title="Open monthly PDF">Report PDF</button>
+            <div class="dropdown" id="export-dropdown">
+              <button id="export-trigger">Export Report ▾</button>
+              <div class="dropdown-menu" id="export-menu" role="menu">
+                <button type="button" data-option="raw-pdf">Raw PDF</button>
+                <button type="button" data-option="raw-excel">Raw Excel</button>
+                <button type="button" data-option="detailed-pdf">Detailed Overview PDF</button>
+                <button type="button" data-option="email-raw-pdf">Send Raw PDF by Email</button>
+                <button type="button" data-option="email-raw-excel">Send Raw Excel by Email</button>
+                <button type="button" data-option="email-detailed-pdf">Send Detailed Overview PDF by Email</button>
+              </div>
+            </div>
           </div>
         </div>
         <div id="summary" class="muted"></div>
+        <div id="export-status" class="muted small" style="margin-top:8px"></div>
       </section>
 
       <section class="panel">
@@ -71,12 +82,6 @@
         </div>
       </section>
 
-      <section class="panel">
-        <div class="field">
-          <button id="send-summary">Send summary email</button>
-          <span id="send-status" class="muted" style="margin-left:8px"></span>
-        </div>
-      </section>
     </main>
 
     <script>
@@ -84,17 +89,16 @@
       const listEl = document.getElementById('list');
       const summaryEl = document.getElementById('summary');
       const loadBtn = document.getElementById('load');
-      const sendBtn = document.getElementById('send-summary');
-      const sendStatus = document.getElementById('send-status');
-      const pdfBtn = document.getElementById('pdf');
+      const exportDropdown = document.getElementById('export-dropdown');
+      const exportTrigger = document.getElementById('export-trigger');
+      const exportMenu = document.getElementById('export-menu');
+      const exportStatus = document.getElementById('export-status');
 
       function currentMonth() {
         const d = new Date();
         const m = String(d.getMonth()+1).padStart(2, '0');
         return `${d.getFullYear()}-${m}`;
       }
-
-      function chfSymbol(){ return 'CHF'; }
 
       async function load(month) {
         listEl.innerHTML = '<tr><td colspan="9">Loading…</td></tr>';
@@ -164,27 +168,53 @@
         }
       }
 
-      document.getElementById('load').addEventListener('click', () => load(monthEl.value));
+      if (loadBtn) {
+        loadBtn.addEventListener('click', () => load(monthEl.value));
+      }
 
-      sendBtn.addEventListener('click', async () => {
-        sendStatus.textContent = 'Sending…';
-        try {
-          const m = monthEl.value || currentMonth();
-          const res = await fetch(`/api/send-summary?month=${encodeURIComponent(m)}`, { method: 'POST' });
-          const data = await res.json();
-          if (!res.ok || !data.ok) throw new Error(data.error || 'Failed');
-          sendStatus.textContent = `Sent summary for ${data.month} (count: ${data.count}, total: CHF ${Number(data.total||0).toFixed(2)})`;
-        } catch (err) {
-          sendStatus.textContent = 'Error: ' + err.message;
-        }
-      });
-
-      pdfBtn.addEventListener('click', () => {
-        const m = monthEl.value || currentMonth();
-        const ts = Date.now();
-        const url = `/api/expense-report.pdf?month=${encodeURIComponent(m)}&ts=${ts}`;
-        window.open(url, '_blank');
-      });
+      if (exportTrigger && exportDropdown && exportMenu) {
+        const hideMenu = () => exportDropdown.classList.remove('open');
+        exportTrigger.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          exportDropdown.classList.toggle('open');
+        });
+        document.addEventListener('click', (ev) => {
+          if (!exportDropdown.contains(ev.target)) hideMenu();
+        });
+        document.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Escape') hideMenu();
+        });
+        exportMenu.querySelectorAll('button[data-option]').forEach((btn) => {
+          btn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const option = btn.getAttribute('data-option');
+            if (!option) return;
+            hideMenu();
+            const month = monthEl.value || currentMonth();
+            if (option.startsWith('email-')) {
+              if (exportStatus) exportStatus.textContent = 'Sending…';
+              try {
+                const res = await fetch(`/api/export-report?month=${encodeURIComponent(month)}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ option })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || data.ok === false) throw new Error(data.error || 'Failed to send');
+                if (exportStatus) exportStatus.textContent = `Email queued for ${data.month} (${data.variantLabel})`;
+                if (window.showToast) showToast('Email queued', 'success');
+              } catch (err) {
+                if (exportStatus) exportStatus.textContent = 'Error: ' + err.message;
+                if (window.showToast) showToast(err.message, 'error');
+              }
+            } else {
+              const params = new URLSearchParams({ month, option, ts: Date.now().toString() });
+              window.open(`/api/export-report?${params.toString()}`, '_blank');
+              if (exportStatus) exportStatus.textContent = '';
+            }
+          });
+        });
+      }
 
       const cm = currentMonth();
       monthEl.value = cm;

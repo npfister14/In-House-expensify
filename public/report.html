@@ -36,9 +36,39 @@
         <div class="flex items-center gap-2">
           <input id="month" type="month" class="input input-bordered input-sm" />
           <button id="load" class="btn btn-sm">Load</button>
-          <a id="pdf" class="btn btn-sm btn-outline" target="_blank">PDF</a>
+          <div class="relative" id="export-dropdown">
+            <button id="export-trigger" class="btn btn-sm">Export Report ▾</button>
+            <div
+              id="export-menu"
+              class="absolute right-0 mt-2 w-64 bg-base-100 border border-base-300 rounded-xl shadow-xl hidden z-50"
+            >
+              <button type="button" data-option="raw-pdf" class="block w-full text-left px-4 py-2 hover:bg-base-200">
+                Raw PDF
+              </button>
+              <button type="button" data-option="raw-excel" class="block w-full text-left px-4 py-2 hover:bg-base-200">
+                Raw Excel
+              </button>
+              <button type="button" data-option="detailed-pdf" class="block w-full text-left px-4 py-2 hover:bg-base-200">
+                Detailed Overview PDF
+              </button>
+              <button type="button" data-option="email-raw-pdf" class="block w-full text-left px-4 py-2 text-blue-600 hover:bg-base-200">
+                Send Raw PDF by Email
+              </button>
+              <button type="button" data-option="email-raw-excel" class="block w-full text-left px-4 py-2 text-blue-600 hover:bg-base-200">
+                Send Raw Excel by Email
+              </button>
+              <button
+                type="button"
+                data-option="email-detailed-pdf"
+                class="block w-full text-left px-4 py-2 text-blue-600 hover:bg-base-200"
+              >
+                Send Detailed Overview PDF by Email
+              </button>
+            </div>
+          </div>
         </div>
       </div>
+      <div id="export-status" class="text-xs opacity-70 text-right mt-2"></div>
 
       <!-- Executive Summary -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
@@ -124,8 +154,12 @@
 
       const monthEl = document.getElementById('month');
       const btnLoad = document.getElementById('load');
-      const linkPdf = document.getElementById('pdf');
-      monthEl.value = currentMonth();
+      const exportDropdown = document.getElementById('export-dropdown');
+      const exportTrigger = document.getElementById('export-trigger');
+      const exportMenu = document.getElementById('export-menu');
+      const exportStatus = document.getElementById('export-status');
+      let currentPeriod = currentMonth();
+      monthEl.value = currentPeriod;
 
       async function load(){
         const m = monthEl.value || currentMonth();
@@ -147,7 +181,8 @@
 
         document.getElementById('title').textContent = `Monthly Expense Report — ${report.period}`;
         document.getElementById('subtitle').textContent = `Generated ${nowUTC()}`;
-        linkPdf.href = `/api/expense-report.pdf?month=${encodeURIComponent(report.period)}&ts=${Date.now()}`;
+        currentPeriod = report.period;
+        if (exportStatus) exportStatus.textContent = '';
 
         // Executive summary
         let g=0,n=0,v=0;
@@ -229,7 +264,56 @@
         }).join('');
       }
 
-      btnLoad.addEventListener('click', load);
+      if (btnLoad) {
+        btnLoad.addEventListener('click', load);
+      }
+
+      if (exportTrigger && exportMenu && exportDropdown) {
+        const hideMenu = () => exportMenu.classList.add('hidden');
+        const toggleMenu = () => {
+          if (exportMenu.classList.contains('hidden')) exportMenu.classList.remove('hidden');
+          else exportMenu.classList.add('hidden');
+        };
+        exportTrigger.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          toggleMenu();
+        });
+        document.addEventListener('click', (ev) => {
+          if (!exportDropdown.contains(ev.target)) hideMenu();
+        });
+        document.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Escape') hideMenu();
+        });
+        exportMenu.querySelectorAll('button[data-option]').forEach((btn) => {
+          btn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const option = btn.getAttribute('data-option');
+            if (!option) return;
+            hideMenu();
+            const period = currentPeriod || (monthEl.value || currentMonth());
+            if (option.startsWith('email-')) {
+              if (exportStatus) exportStatus.textContent = 'Sending email…';
+              try {
+                const res = await fetch(`/api/export-report?month=${encodeURIComponent(period)}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ option })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || data.ok === false) throw new Error(data.error || 'Failed to send');
+                if (exportStatus) exportStatus.textContent = `Email queued for ${data.month} (${data.variantLabel})`;
+              } catch (err) {
+                if (exportStatus) exportStatus.textContent = `Error: ${err.message}`;
+              }
+            } else {
+              const params = new URLSearchParams({ month: period, option, ts: Date.now().toString() });
+              window.open(`/api/export-report?${params.toString()}`, '_blank');
+              if (exportStatus) exportStatus.textContent = '';
+            }
+          });
+        });
+      }
+
       load();
     </script>
   </body>
