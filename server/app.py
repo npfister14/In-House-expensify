@@ -989,40 +989,109 @@ def _prepare_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
 def render_raw_report_pdf(report: dict[str, Any]) -> bytes:
     """Render a minimal PDF containing a raw table of transactions."""
     try:
+        from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4
-        from reportlab.platypus import SimpleDocTemplate, Table
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import mm
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
     except Exception as exc:  # pragma: no cover - depends on optional dependency
         raise RuntimeError("Raw PDF export requires reportlab. Install it: pip install reportlab") from exc
 
+    from xml.sax.saxutils import escape
+
     export_rows = _prepare_export_rows(report)
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=16 * mm,
+        rightMargin=16 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
+    )
+
+    base_style = ParagraphStyle(
+        "TableCell",
+        parent=getSampleStyleSheet()["BodyText"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=11,
+        spaceAfter=0,
+        spaceBefore=0,
+    )
+    header_style = ParagraphStyle(
+        "TableHeader",
+        parent=base_style,
+        fontName="Helvetica-Bold",
+    )
+    link_style = ParagraphStyle(
+        "TableLink",
+        parent=base_style,
+        wordWrap="CJK",
+    )
 
     def _format_amount(value: Any) -> str:
         return "" if value in (None, "") else f"{float(value):.2f}"
 
-    data: list[list[Any]] = [RAW_EXPORT_COLUMNS]
+    def _to_paragraph(value: Any, style: ParagraphStyle = base_style) -> Paragraph:
+        text = "" if value in (None, "") else str(value)
+        if text:
+            text = escape(text).replace("\n", "<br/>")
+        else:
+            text = "&nbsp;"
+        return Paragraph(text, style)
+
+    def _link_paragraph(url_value: Any) -> Paragraph:
+        if not url_value:
+            return _to_paragraph("")
+        url_text = str(url_value)
+        escaped_attr = escape(url_text, {"\"": "&quot;"})
+        escaped_text = escape(url_text).replace("\n", "<br/>")
+        return Paragraph(f'<a href="{escaped_attr}">{escaped_text}</a>', link_style)
+
+    data: list[list[Paragraph]] = []
+    data.append([_to_paragraph(column, header_style) for column in RAW_EXPORT_COLUMNS])
+
     for item in export_rows:
         data.append(
             [
-                item["Name"],
-                _format_amount(item["Amount Gross"]),
-                _format_amount(item["Amount Net"]),
-                item["Attendees"],
-                item["Payment Method"],
-                _format_amount(item["VAT"]),
-                item["Date"],
-                item["Time"],
-                item["Currency"],
-                item["Receipt Link"],
+                _to_paragraph(item["Name"]),
+                _to_paragraph(_format_amount(item["Amount Gross"])),
+                _to_paragraph(_format_amount(item["Amount Net"])),
+                _to_paragraph(item["Attendees"]),
+                _to_paragraph(item["Payment Method"]),
+                _to_paragraph(_format_amount(item["VAT"])),
+                _to_paragraph(item["Date"]),
+                _to_paragraph(item["Time"]),
+                _to_paragraph(item["Currency"]),
+                _link_paragraph(item["Receipt Link"]),
             ]
         )
 
     if len(data) == 1:
-        empty_row = ["No expenses found"] + ["" for _ in range(len(RAW_EXPORT_COLUMNS) - 1)]
+        empty_row = [_to_paragraph("No expenses found")] + [
+            _to_paragraph("") for _ in range(len(RAW_EXPORT_COLUMNS) - 1)
+        ]
         data.append(empty_row)
 
-    table = Table(data, repeatRows=1)
+    num_columns = len(RAW_EXPORT_COLUMNS)
+    column_width = doc.width / num_columns
+    table = Table(data, colWidths=[column_width] * num_columns, repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("FONT", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONT", (0, 1), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.black),
+            ]
+        )
+    )
+
     doc.build([table])
     return buffer.getvalue()
 
