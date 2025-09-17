@@ -987,68 +987,43 @@ def _prepare_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def render_raw_report_pdf(report: dict[str, Any]) -> bytes:
-    """Render a simple table-style PDF with one row per expense."""
+    """Render a minimal PDF containing a raw table of transactions."""
     try:
-        from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet
-        from reportlab.lib.units import mm
-        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+        from reportlab.platypus import SimpleDocTemplate, Table
     except Exception as exc:  # pragma: no cover - depends on optional dependency
         raise RuntimeError("Raw PDF export requires reportlab. Install it: pip install reportlab") from exc
 
     export_rows = _prepare_export_rows(report)
     buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        leftMargin=16 * mm,
-        rightMargin=16 * mm,
-        topMargin=16 * mm,
-        bottomMargin=16 * mm,
-    )
-    styles = getSampleStyleSheet()
-    elements: list[Any] = []
-    title = f"Expenses — {report.get('period', '')}"
-    elements.append(Paragraph(title, styles["Heading2"]))
-    elements.append(Spacer(0, 8))
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+
+    def _format_amount(value: Any) -> str:
+        return "" if value in (None, "") else f"{float(value):.2f}"
 
     data: list[list[Any]] = [RAW_EXPORT_COLUMNS]
     for item in export_rows:
         data.append(
             [
                 item["Name"],
-                f"{item['Amount Gross']:.2f}",
-                f"{item['Amount Net']:.2f}",
+                _format_amount(item["Amount Gross"]),
+                _format_amount(item["Amount Net"]),
                 item["Attendees"],
                 item["Payment Method"],
-                f"{item['VAT']:.2f}",
+                _format_amount(item["VAT"]),
                 item["Date"],
                 item["Time"],
                 item["Currency"],
                 item["Receipt Link"],
             ]
         )
+
     if len(data) == 1:
         empty_row = ["No expenses found"] + ["" for _ in range(len(RAW_EXPORT_COLUMNS) - 1)]
         data.append(empty_row)
 
     table = Table(data, repeatRows=1)
-    table.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 9),
-                ("ALIGN", (1, 1), (2, -1), "RIGHT"),
-                ("ALIGN", (5, 1), (5, -1), "RIGHT"),
-                ("LINEBELOW", (0, 0), (-1, 0), 0.25, colors.black),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.black),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ]
-        )
-    )
-    elements.append(table)
-    doc.build(elements)
+    doc.build([table])
     return buffer.getvalue()
 
 
